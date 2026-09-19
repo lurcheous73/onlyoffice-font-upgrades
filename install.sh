@@ -113,31 +113,34 @@ if ! docker exec "$COMM" nginx -t; then
 fi
 docker exec "$COMM" nginx -s reload || docker restart --timeout 30 "$COMM" >/dev/null
 
-cat > /usr/local/sbin/onlyoffice-font-manager-repair-proxy <<EOF
+cat > /usr/local/sbin/onlyoffice-font-manager-repair-proxy <<'EOF'
 #!/usr/bin/env bash
 set -Eeuo pipefail
-COMM=\$(docker ps --format '{{.Names}}|{{.Image}}' | awk -F'|' 'BEGIN{IGNORECASE=1} /communityserver|community-server/ {print \$1; exit}')
-[[ -n "\$COMM" ]] || { echo "Community Server not running" >&2; exit 1; }
-GATEWAY=\$(docker inspect "\$COMM" | python3 -c 'import json,sys; x=json.load(sys.stdin)[0]["NetworkSettings"]["Networks"]; print(next((v.get("Gateway") for v in x.values() if v.get("Gateway")), ""))')
-SECRET=\$(python3 -c 'import json; print(json.load(open("$CONFIG"))["proxy_secret"])')
+CONFIG=/etc/onlyoffice-font-manager.json
+PORT=8777
+NGINX_DEST=/etc/nginx/includes/onlyoffice-communityserver-font-manager.conf
+COMM=$(docker ps --format '{{.Names}}|{{.Image}}' | awk -F'|' 'BEGIN{IGNORECASE=1} /communityserver|community-server/ {print $1; exit}')
+[[ -n "$COMM" ]] || { echo "Community Server not running" >&2; exit 1; }
+GATEWAY=$(docker inspect "$COMM" | python3 -c 'import json,sys; x=json.load(sys.stdin)[0]["NetworkSettings"]["Networks"]; print(next((v.get("Gateway") for v in x.values() if v.get("Gateway")), ""))')
+SECRET=$(python3 -c 'import json; print(json.load(open("/etc/onlyoffice-font-manager.json"))["proxy_secret"])')
 cat >/tmp/oofm-nginx.conf <<CONF
 location = /font-manager { return 301 /font-manager/; }
 location /font-manager/ {
-    proxy_pass http://\$GATEWAY:$PORT/font-manager/;
+    proxy_pass http://$GATEWAY:$PORT/font-manager/;
     proxy_http_version 1.1;
     proxy_set_header Host \$host;
     proxy_set_header X-Real-IP \$remote_addr;
     proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
     proxy_set_header X-Forwarded-Proto \$scheme;
-    proxy_set_header X-OO-Font-Proxy "\$SECRET";
+    proxy_set_header X-OO-Font-Proxy "$SECRET";
     proxy_read_timeout 300s;
     proxy_send_timeout 300s;
     client_max_body_size 45m;
 }
 CONF
-docker cp /tmp/oofm-nginx.conf "\$COMM:$NGINX_DEST"
-docker exec "\$COMM" nginx -t
-docker exec "\$COMM" nginx -s reload
+docker cp /tmp/oofm-nginx.conf "$COMM:$NGINX_DEST"
+docker exec "$COMM" nginx -t
+docker exec "$COMM" nginx -s reload
 rm -f /tmp/oofm-nginx.conf
 EOF
 chmod 0755 /usr/local/sbin/onlyoffice-font-manager-repair-proxy
